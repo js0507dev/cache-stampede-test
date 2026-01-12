@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: cache-stampede
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/cache_stampede
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+
+# Cache configuration
+cache:
+  stampede:
+    base-ttl-seconds: 60
+    jitter-max-seconds: 10
+    soft-ttl-ratio: 0.8  # 80% of base TTL
+    lock-timeout-seconds: 5
+    lock-retry-interval-ms: 50
+    lock-max-retries: 100
+
+# Logging
+logging:
+  level:
+    com.example.cachestampede: DEBUG
+    org.springframework.data.redis: DEBUG
+
+# Server
+server:
+  port: 8080

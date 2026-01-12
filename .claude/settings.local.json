@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:velog.io)",
+      "Bash(curl:*)",
+      "Bash(chmod:*)",
+      "Bash(yarn install)"
+    ]
+  }
+}

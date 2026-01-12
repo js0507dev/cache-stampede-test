@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    url: jdbc:tc:postgresql:16:///cache_stampede
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+
+cache:
+  stampede:
+    base-ttl-seconds: 10
+    jitter-max-seconds: 2
+    soft-ttl-ratio: 0.8
+    lock-timeout-seconds: 3
+    lock-retry-interval-ms: 50
+    lock-max-retries: 60
+
+logging:
+  level:
+    com.example.cachestampede: DEBUG
