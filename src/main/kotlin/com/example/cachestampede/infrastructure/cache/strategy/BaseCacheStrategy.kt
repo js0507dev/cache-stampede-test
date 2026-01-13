@@ -86,19 +86,28 @@ open class BaseCacheStrategy(
 
             @Suppress("UNCHECKED_CAST")
             if (raw is CachedValue<*>) {
-                return raw as? CachedValue<T>
+                // CachedValue로 역직렬화되었지만, 내부 value가 LinkedHashMap일 수 있음
+                val cachedValue = raw as CachedValue<*>
+                val value = if (valueType.isInstance(cachedValue.value)) {
+                    valueType.cast(cachedValue.value)
+                } else {
+                    // value가 Map 등으로 역직렬화된 경우 → DTO로 변환
+                    cacheObjectMapper.convertValue(cachedValue.value, valueType)
+                }
+                return CachedValue(value, cachedValue.softExpireAt, cachedValue.hardExpireAt)
             }
 
+            // CachedValue가 아닌 경우 (Map 등으로 역직렬화된 경우)
             val javaType = cacheObjectMapper.typeFactory
                 .constructParametricType(CachedValue::class.java, valueType)
-
             cacheObjectMapper.convertValue(raw, javaType)
         } catch (e: Exception) {
             log.warn(
                 "Failed to get CachedValue from cache: key={}, valueType={}, error={}",
                 key,
                 valueType.simpleName,
-                e.message
+                e.message,
+                e
             )
             null
         }

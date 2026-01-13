@@ -25,18 +25,28 @@ spring:
 # Cache configuration
 cache:
   stampede:
-    base-ttl-seconds: 60
-    jitter-max-seconds: 10
-    soft-ttl-ratio: 0.8  # 80% of base TTL
+    base-ttl-seconds: 20        # 테스트용: 짧은 TTL (20초)
+    jitter-max-seconds: 5       # 테스트용: 짧은 jitter
+    soft-ttl-ratio: 0.5         # 50% → soft TTL = 10초
     lock-timeout-seconds: 5
     lock-retry-interval-ms: 50
-    lock-max-retries: 100
+    lock-max-retries: 10        # 10 × 50ms = 500ms (DB 쿼리 100ms 보다 충분히 길게)
 
 # Logging
 logging:
   level:
     com.example.cachestampede: DEBUG
     org.springframework.data.redis: DEBUG
+
+# Actuator / Micrometer
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
 
 # Server
 server:

@@ -1,5 +1,6 @@
 package com.example.cachestampede.infrastructure.cache
 
+import com.fasterxml.jackson.annotation.JsonIgnore
 import java.io.Serializable
 import java.time.Instant
 
@@ -18,22 +19,32 @@ data class CachedValue<T>(
 
     /**
      * 캐시가 완전히 유효한지 (Soft TTL 이전)
+     * @JsonIgnore: Jackson이 이 메서드를 JSON 프로퍼티로 직렬화하지 않도록 함
      */
-    fun isFresh(): Boolean = Instant.now().isBefore(softExpireAt)
+    @get:JsonIgnore
+    val fresh: Boolean get() = Instant.now().isBefore(softExpireAt)
+    
+    fun isFresh(): Boolean = fresh
 
     /**
      * 캐시가 stale 상태인지 (Soft TTL ~ Hard TTL 사이)
      * 값은 반환하되 백그라운드 갱신이 필요
      */
-    fun isStale(): Boolean {
+    @get:JsonIgnore
+    val stale: Boolean get() {
         val now = Instant.now()
         return now.isAfter(softExpireAt) && now.isBefore(hardExpireAt)
     }
+    
+    fun isStale(): Boolean = stale
 
     /**
      * 캐시가 완전히 만료되었는지 (Hard TTL 이후)
      */
-    fun isExpired(): Boolean = Instant.now().isAfter(hardExpireAt)
+    @get:JsonIgnore
+    val expired: Boolean get() = Instant.now().isAfter(hardExpireAt)
+    
+    fun isExpired(): Boolean = expired
 
     companion object {
         fun <T> create(

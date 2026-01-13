@@ -3,6 +3,7 @@ package com.example.cachestampede.infrastructure.cache.strategy
 import com.example.cachestampede.infrastructure.cache.CacheProperties
 import com.example.cachestampede.infrastructure.cache.lock.DistributedLock
 import com.fasterxml.jackson.databind.ObjectMapper
+import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.data.redis.core.RedisTemplate
@@ -28,8 +29,10 @@ class CacheStrategyConfig {
     fun jitterSwrCacheStrategy(
         redisTemplate: RedisTemplate<String, Any>,
         cacheProperties: CacheProperties,
-        cacheObjectMapper: ObjectMapper
-    ): JitterSwrCacheStrategy = JitterSwrCacheStrategy(redisTemplate, cacheProperties, cacheObjectMapper)
+        cacheObjectMapper: ObjectMapper,
+        distributedLock: DistributedLock,
+        meterRegistry: MeterRegistry
+    ): JitterSwrCacheStrategy = JitterSwrCacheStrategy(redisTemplate, cacheProperties, cacheObjectMapper, distributedLock, meterRegistry)
 
     @Bean
     fun jitterLockCacheStrategy(
@@ -44,6 +47,7 @@ class CacheStrategyConfig {
         redisTemplate: RedisTemplate<String, Any>,
         cacheProperties: CacheProperties,
         cacheObjectMapper: ObjectMapper,
-        distributedLock: DistributedLock
-    ): FullProtectionCacheStrategy = FullProtectionCacheStrategy(redisTemplate, cacheProperties, cacheObjectMapper, distributedLock)
+        distributedLock: DistributedLock,
+        meterRegistry: MeterRegistry
+    ): FullProtectionCacheStrategy = FullProtectionCacheStrategy(redisTemplate, cacheProperties, cacheObjectMapper, distributedLock, meterRegistry)
 }

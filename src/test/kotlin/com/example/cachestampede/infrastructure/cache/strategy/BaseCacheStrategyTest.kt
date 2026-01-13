@@ -34,7 +34,7 @@ class BaseCacheStrategyTest : DescribeSpec({
         val strategy = BaseCacheStrategy(redisTemplate, cacheProperties, objectMapper)
 
         it("[성공] 캐시 HIT - 캐시된 값 반환") {
-            every { valueOps.get("product:1") } returns "cached_value"
+            every { valueOps.get("product:basic:1") } returns "cached_value"
             val loaderCalled = AtomicInteger(0)
 
             val result = strategy.getOrLoad("1", String::class.java) {
@@ -47,7 +47,7 @@ class BaseCacheStrategyTest : DescribeSpec({
         }
 
         it("[성공] 캐시 MISS - loader 호출 후 캐시 저장") {
-            every { valueOps.get("product:1") } returns null
+            every { valueOps.get("product:basic:1") } returns null
             every { valueOps.set(any(), any(), any<Duration>()) } just runs
             val loaderCalled = AtomicInteger(0)
 
@@ -58,11 +58,11 @@ class BaseCacheStrategyTest : DescribeSpec({
 
             result shouldBe "new_value"
             loaderCalled.get() shouldBe 1
-            verify { valueOps.set("product:1", "new_value", Duration.ofSeconds(60)) }
+            verify { valueOps.set("product:basic:1", "new_value", Duration.ofSeconds(60)) }
         }
 
         it("[성공] loader가 null 반환 시 캐시 저장하지 않음") {
-            every { valueOps.get("product:1") } returns null
+            every { valueOps.get("product:basic:1") } returns null
 
             val result = strategy.getOrLoad("1", String::class.java) { null }
 
@@ -71,11 +71,11 @@ class BaseCacheStrategyTest : DescribeSpec({
         }
 
         it("[성공] 캐시 무효화") {
-            every { redisTemplate.delete("product:1") } returns true
+            every { redisTemplate.delete("product:basic:1") } returns true
 
             strategy.invalidate("1")
 
-            verify { redisTemplate.delete("product:1") }
+            verify { redisTemplate.delete("product:basic:1") }
         }
     }
 })

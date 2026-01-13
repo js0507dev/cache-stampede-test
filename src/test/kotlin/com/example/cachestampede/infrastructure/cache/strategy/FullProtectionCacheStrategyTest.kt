@@ -6,6 +6,7 @@ import com.example.cachestampede.infrastructure.cache.lock.DistributedLock
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.kotest.core.spec.style.DescribeSpec
 import io.kotest.matchers.shouldBe
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import io.mockk.*
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.data.redis.core.ValueOperations
@@ -21,6 +22,7 @@ class FullProtectionCacheStrategyTest : DescribeSpec({
     val valueOps = mockk<ValueOperations<String, Any>>()
     val distributedLock = mockk<DistributedLock>()
     val objectMapper = ObjectMapper()
+    val meterRegistry = SimpleMeterRegistry()
     val cacheProperties = CacheProperties(
         baseTtlSeconds = 60,
         jitterMaxSeconds = 10,
@@ -36,7 +38,7 @@ class FullProtectionCacheStrategyTest : DescribeSpec({
     }
 
     describe("FullProtectionCacheStrategy (TTL Jitter + SWR + Lock)") {
-        val strategy = FullProtectionCacheStrategy(redisTemplate, cacheProperties, objectMapper, distributedLock)
+        val strategy = FullProtectionCacheStrategy(redisTemplate, cacheProperties, objectMapper, distributedLock, meterRegistry)
 
         it("[성공] Fresh 상태 - 락 없이 즉시 반환") {
             val now = Instant.now()
@@ -45,7 +47,7 @@ class FullProtectionCacheStrategyTest : DescribeSpec({
                 softExpireAt = now.plusSeconds(60),
                 hardExpireAt = now.plusSeconds(120)
             )
-            every { valueOps.get("product:1") } returns cachedValue
+            every { valueOps.get("product:full-protection:1") } returns cachedValue
 
             val result = strategy.getOrLoad("1", String::class.java) { "new_value" }
 
@@ -61,7 +63,7 @@ class FullProtectionCacheStrategyTest : DescribeSpec({
                 softExpireAt = now.minusSeconds(10),
                 hardExpireAt = now.plusSeconds(60)
             )
-            every { valueOps.get("product:1") } returns cachedValue
+            every { valueOps.get("product:full-protection:1") } returns cachedValue
             every { distributedLock.tryLock(any(), any()) } returns true
             every { distributedLock.unlock(any()) } just runs
             every { valueOps.set(any(), any(), any<Duration>()) } just runs
@@ -80,7 +82,7 @@ class FullProtectionCacheStrategyTest : DescribeSpec({
                 softExpireAt = now.minusSeconds(120),
                 hardExpireAt = now.minusSeconds(60)
             )
-            every { valueOps.get("product:1") } returns expiredValue andThen expiredValue
+            every { valueOps.get("product:full-protection:1") } returns expiredValue andThen expiredValue
             every { distributedLock.waitForLock(any(), any(), any(), any()) } returns true
             every { distributedLock.unlock(any()) } just runs
             every { valueOps.set(any(), any(), any<Duration>()) } just runs
@@ -88,12 +90,12 @@ class FullProtectionCacheStrategyTest : DescribeSpec({
             val result = strategy.getOrLoad("1", String::class.java) { "new_value" }
 
             result shouldBe "new_value"
-            verify { distributedLock.waitForLock("refresh:1", any(), any(), any()) }
-            verify { distributedLock.unlock("refresh:1") }
+            verify { distributedLock.waitForLock("refresh:full-protection:1", any(), any(), any()) }
+            verify { distributedLock.unlock("refresh:full-protection:1") }
         }
 
         it("[성공] 캐시 MISS - 락 획득 후 로드") {
-            every { valueOps.get("product:1") } returns null andThen null
+            every { valueOps.get("product:full-protection:1") } returns null andThen null
             every { distributedLock.waitForLock(any(), any(), any(), any()) } returns true
             every { distributedLock.unlock(any()) } just runs
             every { valueOps.set(any(), any(), any<Duration>()) } just runs
@@ -101,7 +103,7 @@ class FullProtectionCacheStrategyTest : DescribeSpec({
             val result = strategy.getOrLoad("1", String::class.java) { "new_value" }
 
             result shouldBe "new_value"
-            verify { distributedLock.waitForLock("refresh:1", any(), any(), any()) }
+            verify { distributedLock.waitForLock("refresh:full-protection:1", any(), any(), any()) }
         }
 
         it("[성공] 전략 이름 확인") {
@@ -119,7 +121,7 @@ class FullProtectionCacheStrategyTest : DescribeSpec({
             val lockAcquired = AtomicInteger(0)
             val cachedData = AtomicInteger(0)
 
-            every { valueOps.get("product:1") } answers {
+            every { valueOps.get("product:full-protection:1") } answers {
                 if (cachedData.get() > 0) {
                     val now = Instant.now()
                     CachedValue("cached_value", now.plusSeconds(60), now.plusSeconds(120))

@@ -1,6 +1,7 @@
 package com.example.cachestampede.infrastructure.cache
 
 import com.fasterxml.jackson.annotation.JsonTypeInfo
+import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.SerializationFeature
 import com.fasterxml.jackson.databind.jsontype.BasicPolymorphicTypeValidator
@@ -23,6 +24,8 @@ class CacheConfig {
         .registerKotlinModule()
         .registerModule(JavaTimeModule())
         .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+        // 알 수 없는 프로퍼티 무시 (기존 캐시에 isStale/isFresh/isExpired 필드가 있을 수 있음)
+        .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
         // Redis에 Any(Object)로 저장되는 값을 다시 원래 타입(ProductDto, CachedValue<*>)으로 복원하려면
         // 타입 정보가 필요하다. (기존 캐시 값이 Map으로 들어간 경우엔 BaseCacheStrategy에서 추가로 convertValue로 복구)
         .activateDefaultTyping(

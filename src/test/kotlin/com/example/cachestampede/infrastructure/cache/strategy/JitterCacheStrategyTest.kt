@@ -1,6 +1,7 @@
 package com.example.cachestampede.infrastructure.cache.strategy
 
 import com.example.cachestampede.infrastructure.cache.CacheProperties
+import com.fasterxml.jackson.databind.ObjectMapper
 import io.kotest.core.spec.style.DescribeSpec
 import io.kotest.matchers.longs.shouldBeGreaterThanOrEqual
 import io.kotest.matchers.longs.shouldBeLessThanOrEqual
@@ -14,6 +15,7 @@ class JitterCacheStrategyTest : DescribeSpec({
 
     val redisTemplate = mockk<RedisTemplate<String, Any>>()
     val valueOps = mockk<ValueOperations<String, Any>>()
+    val objectMapper = ObjectMapper()
     val cacheProperties = CacheProperties(
         baseTtlSeconds = 60,
         jitterMaxSeconds = 10,
@@ -29,10 +31,10 @@ class JitterCacheStrategyTest : DescribeSpec({
     }
 
     describe("JitterCacheStrategy (TTL Jitter)") {
-        val strategy = JitterCacheStrategy(redisTemplate, cacheProperties)
+        val strategy = JitterCacheStrategy(redisTemplate, cacheProperties, objectMapper)
 
         it("[성공] TTL이 baseTTL ~ baseTTL+jitterMax 범위 내에서 생성됨") {
-            every { valueOps.get("product:1") } returns null
+            every { valueOps.get("product:jitter:1") } returns null
             val capturedTtl = slot<Duration>()
             every { valueOps.set(any(), any(), capture(capturedTtl)) } just runs
 

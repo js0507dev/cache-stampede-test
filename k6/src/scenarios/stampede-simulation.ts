@@ -1,5 +1,10 @@
-import http from 'k6/http';
+// @ts-nocheck
+/// <reference types="k6" />
+/// <reference types="k6/http" />
+/// <reference types="k6/metrics" />
+
 import { check, sleep } from 'k6';
+import http from 'k6/http';
 import { Counter, Rate, Trend } from 'k6/metrics';
 import { buildUrl } from '../utils/config';
 import { pickProductId } from '../utils/workload';
@@ -35,6 +40,7 @@ function seconds(n: number): string {
 }
 
 const strategy: StrategyName = envString('STRATEGY', 'full') as StrategyName;
+const mode = envString('MODE', 'invalidate'); // invalidate | ttl-expiry
 const endpointByStrategy: Record<StrategyName, string> = {
   'no-cache': 'no-cache',
   'basic': 'basic',
@@ -49,60 +55,121 @@ const errors = new Rate('stampede_errors');
 const requests = new Counter('stampede_requests');
 const slowPath = new Counter('stampede_slow_path'); // meta.responseTimeMs 기반 "DB 접근 추정"
 
-export const options = {
-  scenarios: {
-    // 1) 워밍업 (캐시를 채워서 '유효한 캐시' 상태를 만든다)
-    warmup: {
-      executor: 'constant-arrival-rate',
-      rate: envNumber('WARMUP_RPS', 50),
-      timeUnit: '1s',
-      duration: seconds(envNumber('WARMUP_SEC', 15)),
-      preAllocatedVUs: envNumber('WARMUP_VUS', 50),
-      maxVUs: envNumber('MAX_VUS', 2000),
-      exec: 'hit',
-    },
+// TTL-expiry 모드 파라미터 (SWR 테스트용) - 서버 application.yml과 일치시킬 것
+const BASE_TTL_SEC = envNumber('BASE_TTL_SEC', 20);       // 서버: cache.stampede.base-ttl-seconds
+const SOFT_TTL_RATIO = envNumber('SOFT_TTL_RATIO', 0.5);  // 서버: cache.stampede.soft-ttl-ratio
+const SOFT_TTL_SEC = BASE_TTL_SEC * SOFT_TTL_RATIO;       // = 10초
+const WAIT_BUFFER_SEC = envNumber('WAIT_BUFFER_SEC', 2);  // stale 구간 확실히 진입하도록 버퍼
 
-    // 2) 무효화 트리거 (정확한 시점에 1회만 실행)
-    invalidate: {
-      executor: 'per-vu-iterations',
-      vus: 1,
-      iterations: 1,
-      startTime: seconds(envNumber('INVALIDATE_AT_SEC', 15)),
-      exec: 'invalidate',
-    },
+// RPS/시간 파라미터
+const WARMUP_RPS = envNumber('WARMUP_RPS', 50);
+const WARMUP_SEC = envNumber('WARMUP_SEC', 5);            // 짧은 워밍업 (캐시 채우기만)
+const INVALIDATE_AT_SEC = envNumber('INVALIDATE_AT_SEC', 15);
+const BURST_RPS = envNumber('BURST_RPS', 800);
+const BURST_SEC = envNumber('BURST_SEC', 10);
+const COOLDOWN_RPS = envNumber('COOLDOWN_RPS', 100);
+const COOLDOWN_SEC = envNumber('COOLDOWN_SEC', 20);
+const MAX_VUS = envNumber('MAX_VUS', 2000);
+const WARMUP_VUS = envNumber('WARMUP_VUS', 50);
+const BURST_VUS = envNumber('BURST_VUS', 300);
+const COOLDOWN_VUS = envNumber('COOLDOWN_VUS', 100);
+const STALE_WAIT_SEC = Math.max(0, SOFT_TTL_SEC - WARMUP_SEC + WAIT_BUFFER_SEC);
 
-    // 3) 무효화 직후 burst로 스탬피드 유발
-    burst: {
-      executor: 'constant-arrival-rate',
-      rate: envNumber('BURST_RPS', 800),
-      timeUnit: '1s',
-      duration: seconds(envNumber('BURST_SEC', 10)),
-      preAllocatedVUs: envNumber('BURST_VUS', 300),
-      maxVUs: envNumber('MAX_VUS', 2000),
-      startTime: seconds(envNumber('INVALIDATE_AT_SEC', 15)),
-      exec: 'hit',
-    },
-
-    // 4) burst 이후 안정화 구간 관찰
-    cooldown: {
-      executor: 'constant-arrival-rate',
-      rate: envNumber('COOLDOWN_RPS', 100),
-      timeUnit: '1s',
-      duration: seconds(envNumber('COOLDOWN_SEC', 20)),
-      preAllocatedVUs: envNumber('COOLDOWN_VUS', 100),
-      maxVUs: envNumber('MAX_VUS', 2000),
-      startTime: seconds(envNumber('INVALIDATE_AT_SEC', 15) + envNumber('BURST_SEC', 10)),
-      exec: 'hit',
-    },
+const invalidateScenarios = {
+  warmup: {
+    executor: 'constant-arrival-rate',
+    rate: WARMUP_RPS,
+    timeUnit: '1s',
+    duration: seconds(WARMUP_SEC),
+    preAllocatedVUs: WARMUP_VUS,
+    maxVUs: MAX_VUS,
+    exec: 'hit',
   },
+  invalidate: {
+    executor: 'per-vu-iterations',
+    vus: 1,
+    iterations: 1,
+    maxDuration: '1s',
+    exec: 'invalidate',
+    startTime: seconds(INVALIDATE_AT_SEC),
+  },
+  burst: {
+    executor: 'constant-arrival-rate',
+    rate: BURST_RPS,
+    timeUnit: '1s',
+    duration: seconds(BURST_SEC),
+    preAllocatedVUs: BURST_VUS,
+    maxVUs: MAX_VUS,
+    exec: 'hit',
+    startTime: seconds(INVALIDATE_AT_SEC),
+  },
+  cooldown: {
+    executor: 'constant-arrival-rate',
+    rate: COOLDOWN_RPS,
+    timeUnit: '1s',
+    duration: seconds(COOLDOWN_SEC),
+    preAllocatedVUs: COOLDOWN_VUS,
+    maxVUs: MAX_VUS,
+    exec: 'hit',
+    startTime: seconds(INVALIDATE_AT_SEC + BURST_SEC),
+  },
+};
+
+const ttlExpiryScenarios = {
+  warmup: {
+    executor: 'constant-arrival-rate',
+    rate: WARMUP_RPS,
+    timeUnit: '1s',
+    duration: seconds(WARMUP_SEC),
+    preAllocatedVUs: WARMUP_VUS,
+    maxVUs: MAX_VUS,
+    exec: 'hit',
+  },
+  wait_for_stale: {
+    executor: 'shared-iterations',
+    vus: 1,
+    iterations: 1,
+    maxDuration: seconds(STALE_WAIT_SEC + 1),
+    exec: 'waitStale',
+    startTime: seconds(WARMUP_SEC),
+  },
+  burst: {
+    executor: 'constant-arrival-rate',
+    rate: BURST_RPS,
+    timeUnit: '1s',
+    duration: seconds(BURST_SEC),
+    preAllocatedVUs: BURST_VUS,
+    maxVUs: MAX_VUS,
+    exec: 'hit',
+    startTime: seconds(WARMUP_SEC + STALE_WAIT_SEC),
+  },
+  cooldown: {
+    executor: 'constant-arrival-rate',
+    rate: COOLDOWN_RPS,
+    timeUnit: '1s',
+    duration: seconds(COOLDOWN_SEC),
+    preAllocatedVUs: COOLDOWN_VUS,
+    maxVUs: MAX_VUS,
+    exec: 'hit',
+    startTime: seconds(WARMUP_SEC + STALE_WAIT_SEC + BURST_SEC),
+  },
+};
+
+export const options = {
+  scenarios: mode === 'ttl-expiry' ? ttlExpiryScenarios : invalidateScenarios,
 };
 
 export function setup() {
   console.log('=== Stampede Simulation ===');
   console.log(`strategy=${strategy}`);
+  console.log(`mode=${mode}`);
   console.log(`hotKeyId=${envNumber('HOT_KEY_ID', 1)}, hotKeyRatio=${envNumber('HOT_KEY_RATIO', 0.95)}`);
-  console.log(`invalidateAtSec=${envNumber('INVALIDATE_AT_SEC', 15)}`);
-  console.log(`burstRps=${envNumber('BURST_RPS', 800)}, burstSec=${envNumber('BURST_SEC', 10)}`);
+  if (mode === 'ttl-expiry') {
+    console.log(`TTL-expiry: softTTL=${SOFT_TTL_SEC}s, wait=${STALE_WAIT_SEC}s`);
+  } else {
+    console.log(`invalidateAtSec=${INVALIDATE_AT_SEC}`);
+  }
+  console.log(`burstRps=${BURST_RPS}, burstSec=${BURST_SEC}`);
 
   return { hotKeyId: envNumber('HOT_KEY_ID', 1) };
 }
@@ -148,6 +215,10 @@ export function invalidate(data: { hotKeyId: number }) {
   const url = buildUrl(`/api/v1/products/${data.hotKeyId}/cache`);
   const res = http.del(url);
   check(res, { 'invalidate status is 200': (r: any) => r.status === 200 });
+}
+
+export function waitStale() {
+  sleep(STALE_WAIT_SEC);
 }
 
 export function handleSummary(data: any) {

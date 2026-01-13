@@ -37,7 +37,7 @@ class JitterLockCacheStrategyTest : DescribeSpec({
         val strategy = JitterLockCacheStrategy(redisTemplate, cacheProperties, objectMapper, distributedLock)
 
         it("[성공] 캐시 HIT - 락 획득 없이 캐시 값 반환") {
-            every { valueOps.get("product:1") } returns "cached_value"
+            every { valueOps.get("product:jitter-lock:1") } returns "cached_value"
 
             val result = strategy.getOrLoad("1", String::class.java) { "new_value" }
 
@@ -46,7 +46,7 @@ class JitterLockCacheStrategyTest : DescribeSpec({
         }
 
         it("[성공] 캐시 MISS + 락 획득 성공 - DB 조회 후 캐시 저장") {
-            every { valueOps.get("product:1") } returns null andThen null  // 첫 조회, 락 후 조회
+            every { valueOps.get("product:jitter-lock:1") } returns null andThen null  // 첫 조회, 락 후 조회
             every { distributedLock.waitForLock(any(), any(), any(), any()) } returns true
             every { distributedLock.unlock(any()) } just runs
             every { valueOps.set(any(), any(), any<Duration>()) } just runs
@@ -59,12 +59,12 @@ class JitterLockCacheStrategyTest : DescribeSpec({
 
             result shouldBe "new_value"
             loaderCalled.get() shouldBe 1
-            verify { distributedLock.waitForLock("refresh:1", any(), any(), any()) }
-            verify { distributedLock.unlock("refresh:1") }
+            verify { distributedLock.waitForLock("refresh:jitter-lock:1", any(), any(), any()) }
+            verify { distributedLock.unlock("refresh:jitter-lock:1") }
         }
 
         it("[성공] 락 획득 후 캐시가 이미 갱신된 경우 - DB 조회하지 않음") {
-            every { valueOps.get("product:1") } returns null andThen "cached_by_other"
+            every { valueOps.get("product:jitter-lock:1") } returns null andThen "cached_by_other"
             every { distributedLock.waitForLock(any(), any(), any(), any()) } returns true
             every { distributedLock.unlock(any()) } just runs
             val loaderCalled = AtomicInteger(0)
@@ -79,7 +79,7 @@ class JitterLockCacheStrategyTest : DescribeSpec({
         }
 
         it("[성공] 락 획득 실패 + 대기 후 캐시에 값 있음 - 캐시 값 반환") {
-            every { valueOps.get("product:1") } returns null andThen "cached_value"
+            every { valueOps.get("product:jitter-lock:1") } returns null andThen "cached_value"
             every { distributedLock.waitForLock(any(), any(), any(), any()) } returns false
 
             val result = strategy.getOrLoad("1", String::class.java) { "new_value" }
@@ -88,7 +88,7 @@ class JitterLockCacheStrategyTest : DescribeSpec({
         }
 
         it("[실패] 락 획득 실패 + 캐시에도 값 없음 - Fallback으로 직접 로드") {
-            every { valueOps.get("product:1") } returns null andThen null
+            every { valueOps.get("product:jitter-lock:1") } returns null andThen null
             every { distributedLock.waitForLock(any(), any(), any(), any()) } returns false
 
             val result = strategy.getOrLoad("1", String::class.java) { "fallback_value" }
@@ -110,7 +110,7 @@ class JitterLockCacheStrategyTest : DescribeSpec({
 
             // 실제 락 동작을 시뮬레이션하는 모의 객체
             val lockAcquired = AtomicInteger(0)
-            every { valueOps.get("product:1") } answers {
+            every { valueOps.get("product:jitter-lock:1") } answers {
                 if (lockAcquired.get() > 0) "cached_value" else null
             }
             every { distributedLock.waitForLock(any(), any(), any(), any()) } answers {

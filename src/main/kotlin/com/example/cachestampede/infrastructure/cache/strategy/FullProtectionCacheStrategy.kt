@@ -4,6 +4,9 @@ import com.example.cachestampede.infrastructure.cache.CacheProperties
 import com.example.cachestampede.infrastructure.cache.CachedValue
 import com.example.cachestampede.infrastructure.cache.lock.DistributedLock
 import com.fasterxml.jackson.databind.ObjectMapper
+import io.micrometer.core.instrument.Counter
+import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.Timer
 import org.springframework.data.redis.core.RedisTemplate
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
@@ -20,12 +23,78 @@ class FullProtectionCacheStrategy(
     redisTemplate: RedisTemplate<String, Any>,
     cacheProperties: CacheProperties,
     cacheObjectMapper: ObjectMapper,
-    private val distributedLock: DistributedLock
+    private val distributedLock: DistributedLock,
+    meterRegistry: MeterRegistry
 ) : BaseCacheStrategy(redisTemplate, cacheProperties, cacheObjectMapper) {
 
     override val strategyName: String = "full-protection"
 
     private val refreshingKeys = ConcurrentHashMap.newKeySet<String>()
+
+    // ---- Metrics (Full Protection 관측용) ----
+    // Cache hit/miss metrics with TTL state tags
+    private val cacheHitFresh: Counter = Counter.builder("cache.full.cache_hit")
+        .tag("strategy", strategyName)
+        .tag("state", "fresh")
+        .register(meterRegistry)
+    
+    private val cacheHitStale: Counter = Counter.builder("cache.full.cache_hit")
+        .tag("strategy", strategyName)
+        .tag("state", "stale") // soft TTL
+        .register(meterRegistry)
+    
+    private val cacheMissExpired: Counter = Counter.builder("cache.full.cache_miss")
+        .tag("strategy", strategyName)
+        .tag("state", "expired") // hard TTL
+        .register(meterRegistry)
+    
+    private val cacheMissNull: Counter = Counter.builder("cache.full.cache_miss")
+        .tag("strategy", strategyName)
+        .tag("state", "null")
+        .register(meterRegistry)
+    
+    // Revalidate metrics with TTL state tags
+    private val revalidateStartedSoft: Counter = Counter.builder("cache.full.revalidate_started")
+        .tag("strategy", strategyName)
+        .tag("ttl_state", "soft")
+        .register(meterRegistry)
+    
+    private val revalidateStartedHard: Counter = Counter.builder("cache.full.revalidate_started")
+        .tag("strategy", strategyName)
+        .tag("ttl_state", "hard")
+        .register(meterRegistry)
+    
+    private val revalidateFinishedSoft: Counter = Counter.builder("cache.full.revalidate_finished")
+        .tag("strategy", strategyName)
+        .tag("ttl_state", "soft")
+        .register(meterRegistry)
+    
+    private val revalidateFinishedHard: Counter = Counter.builder("cache.full.revalidate_finished")
+        .tag("strategy", strategyName)
+        .tag("ttl_state", "hard")
+        .register(meterRegistry)
+    
+    private val revalidateFailedSoft: Counter = Counter.builder("cache.full.revalidate_failed")
+        .tag("strategy", strategyName)
+        .tag("ttl_state", "soft")
+        .register(meterRegistry)
+    
+    private val revalidateFailedHard: Counter = Counter.builder("cache.full.revalidate_failed")
+        .tag("strategy", strategyName)
+        .tag("ttl_state", "hard")
+        .register(meterRegistry)
+    
+    private val revalidateDurationSoft: Timer = Timer.builder("cache.full.revalidate_duration")
+        .tag("strategy", strategyName)
+        .tag("ttl_state", "soft")
+        .publishPercentileHistogram()
+        .register(meterRegistry)
+    
+    private val revalidateDurationHard: Timer = Timer.builder("cache.full.revalidate_duration")
+        .tag("strategy", strategyName)
+        .tag("ttl_state", "hard")
+        .publishPercentileHistogram()
+        .register(meterRegistry)
 
     override fun <T : Any> getOrLoad(key: String, type: Class<T>, loader: () -> T?): T? {
         val cacheKey = buildCacheKey(key)
@@ -37,21 +106,25 @@ class FullProtectionCacheStrategy(
             when {
                 cachedValue.isFresh() -> {
                     log.debug("[{}] Cache HIT (fresh): key={}", strategyName, cacheKey)
+                    cacheHitFresh.increment()
                     return cachedValue.value
                 }
 
                 cachedValue.isStale() -> {
                     log.debug("[{}] Cache HIT (stale): key={}, triggering background refresh with lock", strategyName, cacheKey)
+                    cacheHitStale.increment()
                     triggerBackgroundRefreshWithLock(key, cacheKey, type, loader)
                     return cachedValue.value
                 }
 
                 else -> {
                     log.debug("[{}] Cache EXPIRED: key={}", strategyName, cacheKey)
+                    cacheMissExpired.increment()
                 }
             }
         } else {
             log.debug("[{}] Cache MISS: key={}", strategyName, cacheKey)
+            cacheMissNull.increment()
         }
 
         // 2. 동기 갱신 (락 사용)
@@ -76,6 +149,7 @@ class FullProtectionCacheStrategy(
 
             if (distributedLock.tryLock(lockKey, lockTimeout)) {
                 try {
+                    revalidateStartedSoft.increment()
                     log.debug("[{}] Background refresh started with lock: key={}", strategyName, cacheKey)
 
                     // 락 획득 후 다시 캐시 상태 확인
@@ -87,10 +161,14 @@ class FullProtectionCacheStrategy(
                         return@runAsync
                     }
 
-                    loadAndCache(cacheKey, loader)
+                    revalidateDurationSoft.recordCallable {
+                        loadAndCache(cacheKey, loader)
+                    }
                     log.debug("[{}] Background refresh completed: key={}", strategyName, cacheKey)
+                    revalidateFinishedSoft.increment()
                 } catch (e: Exception) {
                     log.error("[{}] Background refresh failed: key={}, error={}", strategyName, cacheKey, e.message)
+                    revalidateFailedSoft.increment()
                 } finally {
                     distributedLock.unlock(lockKey)
                     refreshingKeys.remove(cacheKey)
@@ -108,6 +186,8 @@ class FullProtectionCacheStrategy(
         type: Class<T>,
         loader: () -> T?
     ): T? {
+        revalidateStartedHard.increment()
+        
         // 전략별로 락 네임스페이스 분리 (전략 간 간섭 방지)
         val lockKey = "refresh:${strategyName}:$key"
         val lockTimeout = Duration.ofSeconds(cacheProperties.lockTimeoutSeconds)
@@ -126,12 +206,20 @@ class FullProtectionCacheStrategy(
                     return cachedValue.value
                 }
 
-                return loadAndCache(cacheKey, loader)
+                val result = revalidateDurationHard.recordCallable {
+                    loadAndCache(cacheKey, loader)
+                }
+                revalidateFinishedHard.increment()
+                return result
+            } catch (e: Exception) {
+                revalidateFailedHard.increment()
+                throw e
             } finally {
                 distributedLock.unlock(lockKey)
             }
         } else {
             log.warn("[{}] Lock acquisition failed: key={}", strategyName, cacheKey)
+            revalidateFailedHard.increment()
 
             // 캐시 재확인
             val cachedValue = getCachedValueFromCache(cacheKey, type)

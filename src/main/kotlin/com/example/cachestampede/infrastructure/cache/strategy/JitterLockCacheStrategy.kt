@@ -63,15 +63,27 @@ class JitterLockCacheStrategy(
                 distributedLock.unlock(lockKey)
             }
         } else {
-            // 5. 락 획득 실패 - 다시 캐시 확인 (대기 중 다른 스레드가 갱신했을 수 있음)
-            log.warn("[{}] Lock acquisition failed, checking cache: key={}", strategyName, cacheKey)
-            val cachedAfterWait = getFromCache(cacheKey, type)
-            if (cachedAfterWait != null) {
-                return cachedAfterWait
+            // 5. 락 획득 실패 - 캐시 재확인 루프 (5초 이내 반환)
+            log.warn("[{}] Lock acquisition failed, retrying cache check: key={}", strategyName, cacheKey)
+            
+            val maxRetries = cacheProperties.lockMaxRetries
+            repeat(maxRetries) {
+                try {
+                    Thread.sleep(retryInterval.toMillis())
+                } catch (ie: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return null
+                }
+                
+                val cached = getFromCache(cacheKey, type)
+                if (cached != null) {
+                    log.debug("[{}] Cache HIT after retry: key={}", strategyName, cacheKey)
+                    return cached
+                }
             }
 
-            // 캐시에도 없으면 직접 로드 (fallback)
-            log.warn("[{}] Fallback to direct load: key={}", strategyName, cacheKey)
+            // 최종 fallback - 모든 재시도 후에도 캐시에 없으면 직접 로드
+            log.warn("[{}] Fallback to direct load after retries: key={}", strategyName, cacheKey)
             return loader()
         }
     }

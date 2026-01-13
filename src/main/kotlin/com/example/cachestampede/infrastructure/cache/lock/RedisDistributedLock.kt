@@ -1,5 +1,7 @@
 package com.example.cachestampede.infrastructure.cache.lock
 
+import io.micrometer.core.instrument.MeterRegistry
+import io.micrometer.core.instrument.Timer
 import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.stereotype.Component
@@ -8,10 +10,14 @@ import java.util.UUID
 
 @Component
 class RedisDistributedLock(
-    private val redisTemplate: RedisTemplate<String, Any>
+    private val redisTemplate: RedisTemplate<String, Any>,
+    private val meterRegistry: MeterRegistry
 ) : DistributedLock {
 
     private val log = LoggerFactory.getLogger(javaClass)
+    private val lockWaitTimer: Timer = Timer.builder("cache.lock.wait_time")
+        .publishPercentileHistogram()
+        .register(meterRegistry)
 
     // 스레드별 락 식별자 저장 (재진입 방지 및 안전한 해제를 위함)
     private val lockValues = ThreadLocal<MutableMap<String, String>>()
@@ -74,10 +80,12 @@ class RedisDistributedLock(
         timeout: Duration,
         retryInterval: Duration
     ): Boolean {
+        val startNs = System.nanoTime()
         val deadline = System.currentTimeMillis() + timeout.toMillis()
 
         while (System.currentTimeMillis() < deadline) {
             if (tryLock(key, ttl)) {
+                lockWaitTimer.record(System.nanoTime() - startNs, java.util.concurrent.TimeUnit.NANOSECONDS)
                 return true
             }
 
@@ -90,6 +98,7 @@ class RedisDistributedLock(
         }
 
         log.warn("Lock acquisition timeout: key={}, timeout={}ms", key, timeout.toMillis())
+        lockWaitTimer.record(System.nanoTime() - startNs, java.util.concurrent.TimeUnit.NANOSECONDS)
         return false
     }
 }

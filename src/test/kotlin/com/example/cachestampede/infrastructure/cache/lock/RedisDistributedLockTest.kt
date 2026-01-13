@@ -3,6 +3,7 @@ package com.example.cachestampede.infrastructure.cache.lock
 import io.kotest.core.spec.style.DescribeSpec
 import io.kotest.matchers.shouldBe
 import io.mockk.*
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.data.redis.core.ValueOperations
 import org.springframework.data.redis.core.script.DefaultRedisScript
@@ -19,7 +20,7 @@ class RedisDistributedLockTest : DescribeSpec({
     }
 
     describe("RedisDistributedLock") {
-        val lock = RedisDistributedLock(redisTemplate)
+        val lock = RedisDistributedLock(redisTemplate, SimpleMeterRegistry())
 
         describe("tryLock") {
             it("[성공] 락 획득 성공") {
